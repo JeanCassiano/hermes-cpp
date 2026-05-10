@@ -9,3 +9,7 @@ ThreadPool::ThreadPool(size_t num_threads){
 void ThreadPool::enqueue(std::function<void()> task){
 
 }
+
+size_t ThreadPool::get_worker_count(){
+    return this->workers.size();
+}
