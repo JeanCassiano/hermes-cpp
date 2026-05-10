@@ -72,7 +72,7 @@
 */
 
 // This test verifies if the constructor accepts a size_t parameter
-TEST(ThreadConstructorTest, AcceptParameterSizeT) {
+TEST(ThreadPoolTest, AcceptParameterSizeT) {
 
     // ---------------- ARRANGE ----------------
     // Create the input value we want to test.
@@ -101,7 +101,7 @@ TEST(ThreadPoolTest, CreateExactlyNWorkers){
     EXPECT_EQ(pool.get_worker_count(), number_of_threads);
 }
 
-// Test if each worker start in a idle state
+// Test if each worker starts in a idle state
 TEST(ThreadPoolTest, WorkersStartIdle){
     size_t number_of_threads = 5;
     ThreadPool pool(number_of_threads);

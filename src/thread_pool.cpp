@@ -6,10 +6,22 @@ ThreadPool::ThreadPool(size_t num_threads){
     }
 }
 
+void ThreadPool::worker_loop(){
+
+}
+
+ThreadPool::~ThreadPool(){
+
+}
+
 void ThreadPool::enqueue(std::function<void()> task){
 
 }
 
 size_t ThreadPool::get_worker_count(){
     return this->workers.size();
+}
+
+size_t ThreadPool::get_busy_worker_count(){
+    return this->busy_workers.load();
 }
