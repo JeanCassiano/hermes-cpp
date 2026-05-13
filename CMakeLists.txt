@@ -25,23 +25,31 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 # Make GoogleTest available to the project
 FetchContent_MakeAvailable(googletest)
 
-# ----------------------------
-# Build test executable
-# ----------------------------
+# ==============================================================================
+# TARGET 1: Google Test Executable
+# ==============================================================================
 
 # Create an executable called "run_tests"
-# It includes:
-#   - your test file
-#   - your ThreadPool implementation file
 add_executable(run_tests 
     tests/ThreadPool_test.cpp
     src/thread_pool.cpp
 )
 
-# ----------------------------
-# Link libraries
-# ----------------------------
-
 # Link GoogleTest main (provides main() for tests)
 # Link pthread because ThreadPool uses std::thread (Linux requirement)
 target_link_libraries(run_tests gtest_main pthread)
+
+# ==============================================================================
+# TARGET 2: Manual Test Executable (main.cpp)
+# ==============================================================================
+
+# Create a separate executable called "run_manual_test"
+# We do this separately because main.cpp has its own main() function!
+add_executable(run_manual_test 
+    src/main.cpp
+    src/thread_pool.cpp
+)
+
+# Link pthread because ThreadPool uses std::thread
+# Note: We DO NOT link gtest_main here!
+target_link_libraries(run_manual_test pthread)

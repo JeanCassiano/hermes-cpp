@@ -11,11 +11,12 @@
 
 class ThreadPool {
 public:
-    explicit ThreadPool(size_t num_threads);
+    explicit    ThreadPool(size_t num_threads);
     ~ThreadPool();
-    void enqueue(std::function<void()> task);
-    size_t get_worker_count();
-    size_t get_busy_worker_count();
+    void        enqueue(std::function<void()> task);
+    size_t      get_worker_count();
+    size_t      get_busy_worker_count();
+    void        wait();
 private:
     void worker_loop();
     std::atomic<size_t> busy_workers{0};
@@ -23,6 +24,7 @@ private:
     std::queue<std::function<void()>>   tasks;
     std::mutex                          queue_mutex;
     std::condition_variable             condition;
+    std::condition_variable             wait_condition;
     bool                                stop = false;
 };
 
