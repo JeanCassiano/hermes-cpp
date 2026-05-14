@@ -30,7 +30,6 @@ public:
     {
         using return_type = typename std::invoke_result<F, Args...>::type;
 
-        // Empacota a tarefa para que ela possa retornar um valor no futuro
         auto task = std::make_shared< std::packaged_task<return_type()> >(
             std::bind(std::forward<F>(f), std::forward<Args>(args)...)
         );
