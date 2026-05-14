@@ -92,23 +92,6 @@ ThreadPool::~ThreadPool() {
 }
 
 /**
- * @brief Enqueues a new task to be executed by the thread pool.
- * 
- * Safely pushes a new task into the queue and notifies one of the 
- * waiting worker threads to wake up and process it.
- * 
- * @param task A std::function representing the work to be executed.
- */
-void ThreadPool::enqueue(std::function<void()> task) {
-    {
-        std::unique_lock<std::mutex> lock(this->queue_mutex);
-        this->tasks.push(std::move(task));
-    }
-
-    this->condition.notify_one();
-}
-
-/**
  * @brief Blocks the calling thread until all tasks are completed.
  * 
  * This function acquires the lock and waits on the wait_condition.

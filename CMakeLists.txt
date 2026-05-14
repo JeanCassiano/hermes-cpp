@@ -3,9 +3,9 @@ cmake_minimum_required(VERSION 3.14)
 # Project name (this will be used in generated build files)
 project(ThreadPoolTests)
 
-# Set the C++ standard to C++17
+# Set the C++ standard to C++20
 # This ensures modern C++ features are available
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 
 # ----------------------------
 # GoogleTest setup (FetchContent)
