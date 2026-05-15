@@ -43,9 +43,10 @@ void ThreadPool::worker_loop() {
 
             task = std::move(this->tasks.front());
             this->tasks.pop();
+            this->busy_workers++;
         }
 
-        this->busy_workers++;
+        
         
         try {
             task(); 
@@ -58,10 +59,11 @@ void ThreadPool::worker_loop() {
         }
         
 
-        this->busy_workers--;
+        
 
         {
             std::unique_lock<std::mutex> lock(this->queue_mutex);
+            this->busy_workers--;
             if (this->tasks.empty() && this->busy_workers.load() == 0) {
                 this->wait_condition.notify_all();
             }
@@ -123,6 +125,6 @@ size_t ThreadPool::get_worker_count() {
  * @return size_t The count of busy threads.
  */
 size_t ThreadPool::get_busy_worker_count() {
-    return this->busy_workers.load();
+    return static_cast<size_t>(this->busy_workers);
 }
 
