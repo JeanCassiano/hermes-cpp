@@ -53,3 +53,14 @@ add_executable(run_manual_test
 # Link pthread because ThreadPool uses std::thread
 # Note: We DO NOT link gtest_main here!
 target_link_libraries(run_manual_test pthread)
+
+# ==============================================================================
+# TARGET 3: Notification System Executable
+# ==============================================================================
+
+add_executable(run_notification_system
+    src/notification_system.cpp
+    src/thread_pool.cpp
+)
+
+target_link_libraries(run_notification_system pthread)
