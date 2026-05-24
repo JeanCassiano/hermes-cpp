@@ -6,13 +6,7 @@
 #include <condition_variable>
 #include <thread>
 #include "../include/thread_pool.hpp"
-
-
-
-struct Event {
-    std::string type;
-    std::string email;
-};
+#include "../include/event.hpp"
 
 
 

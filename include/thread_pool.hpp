@@ -53,11 +53,11 @@ public:
     void        wait();
 private:
     void worker_loop();
-    std::atomic<size_t> busy_workers{0};
     std::vector<std::thread>            workers;
     std::queue<std::function<void()>>   tasks;
     std::mutex                          queue_mutex;
     std::condition_variable             condition;
     std::condition_variable             wait_condition;
+    std::atomic<size_t>                 busy_workers{0};
     bool                                stop = false;
 };

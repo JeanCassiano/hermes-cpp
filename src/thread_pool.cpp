@@ -9,7 +9,7 @@
  * @param num_threads The number of worker threads to spawn in the pool.
  * @throws std::invalid_argument if num_threads is 0.
  */
-ThreadPool::ThreadPool(size_t num_threads) : stop(false), busy_workers(0) {
+ThreadPool::ThreadPool(size_t num_threads) : busy_workers(0), stop(false) {
     if (num_threads == 0) {
         throw std::invalid_argument("ThreadPool must have at least 1 worker thread.");
     }
