@@ -14,6 +14,16 @@
 #include <memory>
 #include <vector>
 #include <functional>
+#include <csignal>
+#include <regex>
+
+// ponteiro global para o server.stop() funcionar no signal handler
+static httplib::Server* g_server = nullptr;
+
+static void signal_handler(int) {
+    Logger::warn("Shutting down...");
+    if (g_server) g_server->stop();
+}
 
 using json = nlohmann::json;
 
@@ -131,7 +141,10 @@ int main() {
             Event e = event_queue.pop();
             if (e.id == -1) break; // sentinel de shutdown
 
-            rate_limiter.acquire();
+            if (!rate_limiter.try_acquire()) {
+                metrics().rate_limit_hits++;
+                rate_limiter.acquire(); // bloqueia até ter token
+            }
 
             pool.enqueue([e, smtp, &scheduler, db, db_mutex]() mutable {
                 auto start = std::chrono::steady_clock::now();
@@ -187,6 +200,14 @@ int main() {
             Event e;
             e.type  = body["type"].get<std::string>();
             e.email = body["email"].get<std::string>();
+
+            // validação básica de email: deve ter @ e pelo menos um ponto no domínio
+            static const std::regex email_re(R"([^@\s]+@[^@\s]+\.[^@\s]+)");
+            if (!std::regex_match(e.email, email_re)) {
+                res.status = 400;
+                res.set_content(json{{"error", "Invalid email address"}}.dump(), "application/json");
+                return;
+            }
 
             // priority opcional, default = normal
             if (body.contains("priority")) {
@@ -317,6 +338,56 @@ int main() {
         res.set_content(json{{"status", "requeued"}, {"event_id", e.id}}.dump(), "application/json");
     });
 
+    server.Get("/events/:id", [&, db_mutex](const httplib::Request& req, httplib::Response& res) {
+        try {
+            int event_id = std::stoi(req.path_params.at("id"));
+            std::unique_lock<std::mutex> lock(*db_mutex);
+            sqlite3_stmt* stmt;
+            sqlite3_prepare_v2(db,
+                "SELECT id, type, email, priority, status, retry_count, last_error, created_at, updated_at FROM events WHERE id = ?",
+                -1, &stmt, nullptr);
+            sqlite3_bind_int(stmt, 1, event_id);
+
+            if (sqlite3_step(stmt) != SQLITE_ROW) {
+                sqlite3_finalize(stmt);
+                res.status = 404;
+                res.set_content(json{{"error", "Event not found"}}.dump(), "application/json");
+                return;
+            }
+
+            json event = {
+                {"id",          sqlite3_column_int (stmt, 0)},
+                {"type",        (const char*)sqlite3_column_text(stmt, 1)},
+                {"email",       (const char*)sqlite3_column_text(stmt, 2)},
+                {"priority",    sqlite3_column_int (stmt, 3)},
+                {"status",      (const char*)sqlite3_column_text(stmt, 4)},
+                {"retry_count", sqlite3_column_int (stmt, 5)},
+                {"last_error",  sqlite3_column_text(stmt, 6) ? (const char*)sqlite3_column_text(stmt, 6) : ""},
+                {"created_at",  (const char*)sqlite3_column_text(stmt, 7)},
+                {"updated_at",  (const char*)sqlite3_column_text(stmt, 8)}
+            };
+            sqlite3_finalize(stmt);
+            res.set_content(event.dump(2), "application/json");
+        } catch (const std::exception& ex) {
+            res.status = 400;
+            res.set_content(json{{"error", ex.what()}}.dump(), "application/json");
+        }
+    });
+
+    server.Delete("/events", [&, db_mutex](const httplib::Request&, httplib::Response& res) {
+        std::unique_lock<std::mutex> lock(*db_mutex);
+        char* err_msg = nullptr;
+        sqlite3_exec(db, "DELETE FROM events; DELETE FROM dlq;", nullptr, nullptr, &err_msg);
+        if (err_msg) {
+            res.status = 500;
+            res.set_content(json{{"error", err_msg}}.dump(), "application/json");
+            sqlite3_free(err_msg);
+            return;
+        }
+        Logger::warn("All events and DLQ cleared");
+        res.set_content(json{{"status", "cleared"}}.dump(), "application/json");
+    });
+
     server.Get("/metrics", [](const httplib::Request&, httplib::Response& res) {
         res.set_content(metrics().snapshot().dump(2), "application/json");
     });
@@ -330,6 +401,10 @@ int main() {
         }
         return httplib::Server::HandlerResponse::Unhandled;
     });
+
+    g_server = &server;
+    std::signal(SIGINT,  signal_handler);
+    std::signal(SIGTERM, signal_handler);
 
     Logger::info("Server running on http://localhost:8080");
     server.listen("0.0.0.0", 8080);

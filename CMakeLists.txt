@@ -73,8 +73,8 @@ add_executable(run_server
     src/server.cpp
     src/thread_pool.cpp
     src/retry_scheduler.cpp
-    src/smtp_sender_mock.cpp  # trocar por smtp_sender.cpp quando libcurl estiver instalado
+    src/smtp_sender.cpp
 )
 
-target_link_libraries(run_server pthread sqlite3)
+target_link_libraries(run_server pthread sqlite3 curl)
 target_include_directories(run_server PRIVATE include)
