@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.14)
 
 # Project name (this will be used in generated build files)
-project(ThreadPoolTests)
+project(hermes-cpp)
 
 # Set the C++ standard to C++20
 # This ensures modern C++ features are available
