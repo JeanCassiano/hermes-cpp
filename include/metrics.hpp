@@ -10,7 +10,8 @@ struct Metrics {
     std::atomic<int> failed{0};
     std::atomic<int> dlq_total{0};
     std::atomic<int> rate_limit_hits{0};
-    std::atomic<long long> total_latency_ms{0}; // soma para calcular média
+    std::atomic<long long> total_latency_ms{0};
+    std::string tag;  // "internal" or "redis"
 
     void record_sent(long long latency_ms) {
         ++sent;
@@ -28,9 +29,3 @@ struct Metrics {
         };
     }
 };
-
-// Singleton global
-inline Metrics& metrics() {
-    static Metrics instance;
-    return instance;
-}

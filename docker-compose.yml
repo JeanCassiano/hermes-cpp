@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  hermes:
+    build: .
+    container_name: hermes
+    ports:
+      - "8080:8080"
+    environment:
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    depends_on:
+      - redis
+      - mailhog
+    restart: unless-stopped
+    networks:
+      - hermes-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    networks:
+      - hermes-network
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: mailhog
+    ports:
+      - "8025:8025"  # Web UI
+      - "1025:1025"  # SMTP
+    restart: unless-stopped
+    networks:
+      - hermes-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    depends_on:
+      - hermes
+    restart: unless-stopped
+    networks:
+      - hermes-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_USER: admin
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - hermes-network
+
+networks:
+  hermes-network:
+    driver: bridge

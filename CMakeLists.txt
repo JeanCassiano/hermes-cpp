@@ -76,5 +76,5 @@ add_executable(run_server
     src/smtp_sender.cpp
 )
 
-target_link_libraries(run_server pthread sqlite3 curl)
+target_link_libraries(run_server pthread sqlite3 curl hiredis)
 target_include_directories(run_server PRIVATE include)
