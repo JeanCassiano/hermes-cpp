@@ -8,7 +8,6 @@
 #include "../include/retry_scheduler.hpp"
 #include "../include/priority_queue.hpp"
 #include "../include/rate_limiter.hpp"
-#include "../include/redis_broker.hpp"
 #include <sqlite3.h>
 #include <iostream>
 #include <mutex>
@@ -17,7 +16,6 @@
 #include <functional>
 #include <csignal>
 #include <regex>
-#include <sstream>
 
 // ponteiro global para o server.stop() funcionar no signal handler
 static httplib::Server* g_server = nullptr;
@@ -131,103 +129,56 @@ int main() {
     auto db_mutex = std::make_shared<std::mutex>();
     SmtpConfig smtp = SmtpConfig::from_env();
 
-    // V3: Dual pipelines — internal queue + Redis broker
     PriorityEventQueue event_queue;
     RetryScheduler     scheduler(event_queue);
     RateLimiter        rate_limiter(5, 10);
+    ThreadPool         pool(4);
+    httplib::Server    server;
 
-    // Metrics instances for each broker
-    Metrics metrics_internal;
-    metrics_internal.tag = "internal";
-    Metrics metrics_redis;
-    metrics_redis.tag = "redis";
-
-    // Thread pools for each broker
-    ThreadPool pool_internal(4);
-    ThreadPool pool_redis(4);
-
-    // Redis broker setup
-    std::string redis_host = getenv("REDIS_HOST") ? getenv("REDIS_HOST") : "localhost";
-    int redis_port = getenv("REDIS_PORT") ? std::stoi(getenv("REDIS_PORT")) : 6379;
-    RedisBroker redis_broker(redis_host, redis_port);
-
-    httplib::Server server;
-
-    // Lambda to process events (used by both dispatchers)
-    auto process_event = [&](const Event& e, Metrics& metrics, ThreadPool& pool,
-                              bool is_redis_broker) {
-        pool.enqueue([e, smtp, &scheduler, db, db_mutex, &metrics, is_redis_broker]() mutable {
-            auto start = std::chrono::steady_clock::now();
-
-            auto result = send_email(smtp, e);
-
-            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - start).count();
-
-            std::unique_lock<std::mutex> lock(*db_mutex);
-
-            if (result.success) {
-                metrics.record_sent(ms);
-                update_status(db, e.id, "sent", e);
-                Logger::info(std::string(is_redis_broker ? "[REDIS] " : "[INTERNAL] ") +
-                             "Sent '" + e.type + "' to " + e.email);
-            } else if (e.retry_count < e.max_retries) {
-                int delay = 1 << e.retry_count;
-                e.retry_count++;
-                e.last_error = result.error;
-                update_status(db, e.id, "pending", e);
-                lock.unlock();
-                scheduler.schedule(e, delay);
-                Logger::warn(std::string(is_redis_broker ? "[REDIS] " : "[INTERNAL] ") +
-                             "Retry " + std::to_string(e.retry_count) + "/" +
-                             std::to_string(e.max_retries) + " for event " +
-                             std::to_string(e.id) + " in " + std::to_string(delay) + "s");
-            } else {
-                metrics.failed++;
-                metrics.dlq_total++;
-                move_to_dlq(db, e, result.error);
-                update_status(db, e.id, "failed", e);
-                Logger::error(std::string(is_redis_broker ? "[REDIS] " : "[INTERNAL] ") +
-                              "Event " + std::to_string(e.id) + " moved to DLQ: " + result.error);
-            }
-        });
-    };
-
-    // Dispatcher A: Internal queue (original V2 pipeline)
-    std::thread dispatcher_a([&] {
+    // Dispatcher: consome da priority queue e despacha pro ThreadPool
+    std::thread dispatcher([&] {
         while (true) {
             Event e = event_queue.pop();
-            if (e.id == -1) break;
+            if (e.id == -1) break; // sentinel de shutdown
 
             if (!rate_limiter.try_acquire()) {
-                metrics_internal.rate_limit_hits++;
-                rate_limiter.acquire();
+                metrics().rate_limit_hits++;
+                rate_limiter.acquire(); // bloqueia até ter token
             }
 
-            process_event(e, metrics_internal, pool_internal, false);
+            pool.enqueue([e, smtp, &scheduler, db, db_mutex]() mutable {
+                auto start = std::chrono::steady_clock::now();
+
+                auto result = send_email(smtp, e);
+
+                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - start).count();
+
+                std::unique_lock<std::mutex> lock(*db_mutex);
+
+                if (result.success) {
+                    metrics().record_sent(ms);
+                    update_status(db, e.id, "sent", e);
+                    Logger::info("Sent '" + e.type + "' to " + e.email);
+                } else if (e.retry_count < e.max_retries) {
+                    int delay = 1 << e.retry_count; // 2^n: 1s, 2s, 4s
+                    e.retry_count++;
+                    e.last_error = result.error;
+                    update_status(db, e.id, "pending", e);
+                    lock.unlock();
+                    scheduler.schedule(e, delay);
+                    Logger::warn("Retry " + std::to_string(e.retry_count) + "/" +
+                                 std::to_string(e.max_retries) + " for event " +
+                                 std::to_string(e.id) + " in " + std::to_string(delay) + "s");
+                } else {
+                    metrics().failed++;
+                    metrics().dlq_total++;
+                    move_to_dlq(db, e, result.error);
+                    update_status(db, e.id, "failed", e);
+                    Logger::error("Event " + std::to_string(e.id) + " moved to DLQ: " + result.error);
+                }
+            });
         }
-    });
-
-    // Dispatcher B: Redis subscriber (new V3 pipeline)
-    // This lambda is passed to redis_broker.subscribe()
-    std::thread dispatcher_b([&] {
-        redis_broker.subscribe("notifications", [&](const std::string& payload) {
-            if (payload == "__stop__") return;
-
-            try {
-                auto j = json::parse(payload);
-                Event e;
-                e.id       = j["id"].get<int>();
-                e.type     = j["type"].get<std::string>();
-                e.email    = j["email"].get<std::string>();
-                e.priority = static_cast<Priority>(j["priority"].get<int>());
-                e.created_at = std::chrono::system_clock::now();
-
-                process_event(e, metrics_redis, pool_redis, true);
-            } catch (const std::exception& ex) {
-                Logger::error("Failed to parse Redis message: " + std::string(ex.what()));
-            }
-        });
     });
 
     // ─── Endpoints ───────────────────────────────────────────────────────────
@@ -273,19 +224,9 @@ int main() {
                 e.id = save_event(db, e);
             }
 
-            // V3: Dual-publish to both brokers (internal queue + Redis)
             event_queue.push(e);
 
-            auto payload = json{
-                {"id", e.id},
-                {"type", e.type},
-                {"email", e.email},
-                {"priority", static_cast<int>(e.priority)}
-            }.dump();
-            redis_broker.publish("notifications", payload);
-
-            Logger::info("Queued event " + std::to_string(e.id) + " [" + e.type + "] -> " + e.email +
-                         " (published to internal queue + Redis)");
+            Logger::info("Queued event " + std::to_string(e.id) + " [" + e.type + "] -> " + e.email);
 
             res.set_content(json{
                 {"status", "queued"},
@@ -447,45 +388,8 @@ int main() {
         res.set_content(json{{"status", "cleared"}}.dump(), "application/json");
     });
 
-    server.Get("/metrics", [&](const httplib::Request&, httplib::Response& res) {
-        json out = {
-            {"internal", metrics_internal.snapshot()},
-            {"redis", metrics_redis.snapshot()}
-        };
-        res.set_content(out.dump(2), "application/json");
-    });
-
-    server.Get("/metrics/prometheus", [&](const httplib::Request&, httplib::Response& res) {
-        std::ostringstream oss;
-        for (auto* m : {&metrics_internal, &metrics_redis}) {
-            std::string tag = m->tag;
-            int s = m->sent.load();
-            int f = m->failed.load();
-            int d = m->dlq_total.load();
-            int rl = m->rate_limit_hits.load();
-
-            oss << "# HELP hermes_sent_total Total number of successfully sent events\n";
-            oss << "# TYPE hermes_sent_total counter\n";
-            oss << "hermes_sent_total{broker=\"" << tag << "\"} " << s << "\n";
-
-            oss << "# HELP hermes_failed_total Total number of failed events\n";
-            oss << "# TYPE hermes_failed_total counter\n";
-            oss << "hermes_failed_total{broker=\"" << tag << "\"} " << f << "\n";
-
-            oss << "# HELP hermes_dlq_total Total events moved to dead letter queue\n";
-            oss << "# TYPE hermes_dlq_total counter\n";
-            oss << "hermes_dlq_total{broker=\"" << tag << "\"} " << d << "\n";
-
-            oss << "# HELP hermes_rate_limit_hits Total rate limit hits\n";
-            oss << "# TYPE hermes_rate_limit_hits counter\n";
-            oss << "hermes_rate_limit_hits{broker=\"" << tag << "\"} " << rl << "\n";
-
-            oss << "# HELP hermes_avg_latency_ms Average email send latency in milliseconds\n";
-            oss << "# TYPE hermes_avg_latency_ms gauge\n";
-            oss << "hermes_avg_latency_ms{broker=\"" << tag << "\"} "
-                << (s > 0 ? m->total_latency_ms.load() / s : 0) << "\n";
-        }
-        res.set_content(oss.str(), "text/plain; charset=utf-8");
+    server.Get("/metrics", [](const httplib::Request&, httplib::Response& res) {
+        res.set_content(metrics().snapshot().dump(2), "application/json");
     });
 
     // ─── Shutdown ────────────────────────────────────────────────────────────
@@ -505,24 +409,13 @@ int main() {
     Logger::info("Server running on http://localhost:8080");
     server.listen("0.0.0.0", 8080);
 
-    // Graceful shutdown: stop both pipelines
-    Logger::info("Shutting down...");
-
-    // Stop Redis broker (sends __stop__ sentinel)
-    redis_broker.publish("notifications", "__stop__");
-    redis_broker.stop();
-
-    // Stop internal dispatcher with sentinel
+    // Encerra o dispatcher graciosamente
     Event sentinel;
     sentinel.id = -1;
     event_queue.push(sentinel);
+    dispatcher.join();
 
-    dispatcher_a.join();
-    dispatcher_b.join();
+    pool.wait();
 
-    pool_internal.wait();
-    pool_redis.wait();
-
-    Logger::info("Shutdown complete");
     return 0;
 }

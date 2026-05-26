@@ -1,9 +1,0 @@
-global:
-  scrape_interval: 5s
-  evaluation_interval: 5s
-
-scrape_configs:
-  - job_name: 'hermes'
-    static_configs:
-      - targets: ['hermes:8080']
-    metrics_path: '/metrics/prometheus'
